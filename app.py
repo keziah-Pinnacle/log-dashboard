@@ -117,10 +117,10 @@ if len(uploaded_files) > 0:
             ))
             
             # Battery line with markers
-            valid_df = filtered_df.dropna(subset=['battery'])
+            valid_df = filtered_df.dropna(subset=['battery']).reset_index(drop=True)
             # Create event_map and duration_map as Series
             event_map = valid_df['normalized_event'].shift().fillna('None') + ' → ' + valid_df['normalized_event']
-            duration_map = valid_df.index.to_series().diff().fillna(0).dt.total_seconds() / 60  # Approx duration in minutes
+            duration_map = valid_df['timestamp'].diff().fillna(pd.Timedelta(0)).dt.total_seconds() / 60  # Fixed: Use timestamp diff
             
             fig.add_trace(go.Scatter(
                 x=valid_df['timestamp'],
