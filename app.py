@@ -3,6 +3,8 @@ import pandas as pd
 from datetime import datetime
 import plotly.graph_objects as go
 import re  # For extracting camera ID
+from io import BytesIO
+import base64
 
 # Page config
 st.set_page_config(page_title="Log Dashboard", layout="wide")
@@ -116,9 +118,9 @@ if len(uploaded_files) > 0:
             
             # Battery line with markers
             valid_df = filtered_df.dropna(subset=['battery'])
-            # Map events for hover
-            event_map = valid_df['normalized_event'].shift().fillna('') + ' → ' + valid_df['normalized_event']
-            duration_map = valid_df.groupby('timestamp').ngroup().diff().fillna(0) * (1/60)  # Approx duration in minutes
+            # Create event_map and duration_map as Series
+            event_map = valid_df['normalized_event'].shift().fillna('None') + ' → ' + valid_df['normalized_event']
+            duration_map = valid_df.index.to_series().diff().fillna(0).dt.total_seconds() / 60  # Approx duration in minutes
             
             fig.add_trace(go.Scatter(
                 x=valid_df['timestamp'],
@@ -148,6 +150,15 @@ if len(uploaded_files) > 0:
             )
             
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Export PDF button
+            buffer = BytesIO()
+            fig.write_image(buffer, format='pdf', engine='kaleido')
+            buffer.seek(0)
+            b64 = base64.b64encode(buffer.read()).decode()
+            href = f'<a href="data:application/pdf;base64,{b64}" download="battery_report.pdf" target="_blank">📄 Download Graph as PDF</a>'
+            st.markdown(href, unsafe_allow_html=True)
+            
         else:
             st.warning("No battery data for selected cameras.")
         
