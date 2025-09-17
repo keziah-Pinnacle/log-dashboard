@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import plotly.graph_objects as go
-import re  # For extracting camera ID
+import re
 from io import BytesIO
 import base64
+from fpdf import FPDF
 
 # Page config
 st.set_page_config(page_title="Log Dashboard", layout="wide")
@@ -12,15 +13,14 @@ st.set_page_config(page_title="Log Dashboard", layout="wide")
 # Title
 st.title("Log Dashboard")
 
-# File uploader - supports multiple
-uploaded_files = st.file_uploader("Upload log files (plain .txt from your cameras)", type="txt", accept_multiple_files=True)
+# File uploader
+uploaded_files = st.file_uploader("Upload log files (.txt from cameras)", type="txt", accept_multiple_files=True)
 
 if len(uploaded_files) > 0:
-    # Note about pagination
     if len(uploaded_files) > 10:
-        st.info(f"📁 Uploaded {len(uploaded_files)} files. Pagination below is normal—each session processes only current uploads.")
+        st.info(f"📁 Uploaded {len(uploaded_files)} files. Each session processes current uploads only.")
     
-    # Parse all files
+    # Parse logs
     all_data = []
     unique_cameras = set()
     for uploaded_file in uploaded_files:
@@ -28,7 +28,6 @@ if len(uploaded_files) > 0:
         log_content = uploaded_file.read().decode('utf-8')
         lines = log_content.strip().split('\n')
         
-        # Extract camera from filename (e.g., PR7-007120 → 007120) or ID
         camera_match = re.search(r'(\d{6})', filename)
         default_camera = camera_match.group(1) if camera_match else 'Unknown'
         
@@ -42,22 +41,15 @@ if len(uploaded_files) > 0:
                 event_parts = [p.strip() for p in parts[2:] if p.strip()]
                 full_event = ' '.join(event_parts) if event_parts else 'Unknown'
                 
-                # Normalize event: remove battery level for grouping
                 normalized_event = full_event.split(' - Battery Level - ')[0].strip() if ' - Battery Level - ' in full_event else full_event
                 
-                # Parse timestamp
                 dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
                 
-                # Extract battery
                 battery = None
                 if 'Battery Level -' in full_event:
                     battery_str = full_event.split('Battery Level -')[-1].strip().rstrip('%').strip()
-                    try:
-                        battery = int(battery_str)
-                    except:
-                        pass
+                    battery = int(battery_str) if battery_str.isdigit() else None
                 
-                # Extract camera from line if possible (e.g., #ID:007120-000000)
                 id_match = re.search(r'#ID:(\d{6})-\d{6}', line)
                 camera = id_match.group(1) if id_match else default_camera
                 unique_cameras.add(camera)
@@ -73,226 +65,220 @@ if len(uploaded_files) > 0:
                 continue
     
     if not all_data:
-        st.error("No valid log entries found. Check file format.")
+        st.error("No valid log entries. Check format.")
     else:
         df = pd.DataFrame(all_data)
         df = df.sort_values('timestamp')
         
+        # Time range filter
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("Start Date", value=df['timestamp'].min().date())
+        with col2:
+            end_date = st.date_input("End Date", value=df['timestamp'].max().date())
+        date_mask = (df['timestamp'].dt.date >= start_date) & (df['timestamp'].dt.date <= end_date)
+        filtered_df = df[date_mask]
+        
         # Camera filter
         selected_cameras = st.multiselect("Choose Camera ID", options=sorted(list(unique_cameras)), default=list(unique_cameras))
-        filtered_df = df[df['camera'].isin(selected_cameras)]
+        filtered_df = filtered_df[filtered_df['camera'].isin(selected_cameras)]
         
-        # Battery Graph with colored background zones
+        # Battery Graph
         st.subheader("Battery Levels Over Time")
         if filtered_df['battery'].notna().any():
             fig = go.Figure()
             
-            # Add background color zones (vertical fill)
-            fig.add_trace(go.Scatter(
-                x=[filtered_df['timestamp'].min(), filtered_df['timestamp'].max()],
-                y=[0, 20],
-                fill='tozeroy',
-                fillcolor='rgba(139, 0, 0, 0.4)',  # Dark red (0-20%)
-                line=dict(color='rgba(139, 0, 0, 0)'),
-                name='Critical (0-20%)',
-                showlegend=True
-            ))
-            fig.add_trace(go.Scatter(
-                x=[filtered_df['timestamp'].min(), filtered_df['timestamp'].max()],
-                y=[20, 60],
-                fill='tozeroy',
-                fillcolor='rgba(255, 165, 0, 0.4)',  # Orange (20-60%)
-                line=dict(color='rgba(255, 165, 0, 0)'),
-                name='Caution (20-60%)',
-                showlegend=True
-            ))
-            fig.add_trace(go.Scatter(
-                x=[filtered_df['timestamp'].min(), filtered_df['timestamp'].max()],
-                y=[60, 100],
-                fill='tozeroy',
-                fillcolor='rgba(0, 100, 0, 0.4)',  # Dark green (60-100%)
-                line=dict(color='rgba(0, 100, 0, 0)'),
-                name='Good (60-100%)',
-                showlegend=True
-            ))
-            
-            # Battery line with markers
-            valid_df = filtered_df.dropna(subset=['battery']).reset_index(drop=True)
-            # Create event_map and duration_map as Series
-            event_map = valid_df['normalized_event'].shift().fillna('None') + ' → ' + valid_df['normalized_event']
-            duration_map = valid_df['timestamp'].diff().fillna(pd.Timedelta(0)).dt.total_seconds() / 60  # Fixed: Use timestamp diff
-            
-            # Add as columns to valid_df to avoid unhashable Series error
-            valid_df['event_map'] = event_map
-            valid_df['duration_map'] = duration_map
-            
-            fig.add_trace(go.Scatter(
-                x=valid_df['timestamp'],
-                y=valid_df['battery'],
-                mode='lines+markers',
-                line=dict(color='black', width=2),
-                marker=dict(size=8, line=dict(width=1, color='darkgray')),
-                name='Battery %',
-                hovertemplate=
-                '<b>%{x}</b><br>' +
-                'Battery: %{y}%<br>' +
-                'Camera: %{customdata[0]}<br>' +
-                'Event: %{customdata[1]}<br>' +
-                'Pre-Event: %{customdata[2]}<br>' +
-                'Duration: %{customdata[3]:.1f} min<extra></extra>',
-                customdata=valid_df[['camera', 'normalized_event', 'event_map', 'duration_map']].values
-            ))
-            
-            fig.update_layout(
-                title='Battery Levels (Dark Red: 0-20%, Orange: 20-60%, Dark Green: 60-100%)',
-                xaxis_title='Date',
-                yaxis_title='Battery Level (%)',
-                yaxis=dict(range=[0, 100], tickformat='.0f'),
-                height=400,
-                hovermode='x unified',
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Export PDF button
-            buffer = BytesIO()
-            fig.write_image(buffer, format='pdf', engine='kaleido')
-            buffer.seek(0)
-            b64 = base64.b64encode(buffer.read()).decode()
-            href = f'<a href="data:application/pdf;base64,{b64}" download="battery_report.pdf" target="_blank">📄 Download Graph as PDF</a>'
-            st.markdown(href, unsafe_allow_html=True)
-            
-        else:
-            st.warning("No battery data for selected cameras.")
-        
-        # Graph Summary for non-tech users
-        st.subheader("Battery Usage Summary")
-        if filtered_df['battery'].notna().any():
-            power_on_df = filtered_df[filtered_df['normalized_event'].str.contains('Power On', na=False)]
-            recording_start_df = filtered_df[filtered_df['normalized_event'].str.contains('Start Record', na=False)]
-            charging_df = filtered_df[filtered_df['normalized_event'].str.contains('Battery Charging', na=False)]
-            
-            summary_text = "Here's what happened with the battery:\n\n"
-            if not power_on_df.empty:
-                summary_text += f"- Device turned on {len(power_on_df)} times, starting with battery levels from {int(power_on_df['battery'].min())}% to {int(power_on_df['battery'].max())}%.\n"
-            if not recording_start_df.empty:
-                summary_text += f"- Recording started {len(recording_start_df)} times, with battery between {int(recording_start_df['battery'].min())}% and {int(recording_start_df['battery'].max())}%.\n"
-            if not charging_df.empty:
-                summary_text += f"- Charging happened {len(charging_df)} times, boosting battery when it was as low as {int(charging_df['battery'].min())}%.\n"
-            total_usage = len(filtered_df) - len(filtered_df[filtered_df['battery'].isna()])
-            summary_text += f"- Total battery checks: {total_usage}. The battery {'stayed healthy' if filtered_df['battery'].min() > 20 else 'had low points'}."
-            st.markdown(summary_text)
-        else:
-            st.warning("No battery data to summarize.")
-        
-        # Key Activities (summarized key events with non-tech names)
-        st.subheader("Key Activities")
-        compressed_events = []
-        if not filtered_df.empty:
-            current_norm_event = filtered_df.iloc[0]['normalized_event']
-            current_camera = filtered_df.iloc[0]['camera']
-            start_time = filtered_df.iloc[0]['timestamp']
-            batteries = [filtered_df.iloc[0]['battery']] if pd.notna(filtered_df.iloc[0]['battery']) else []
-            end_time = start_time
-            
-            for i in range(1, len(filtered_df)):
-                row = filtered_df.iloc[i]
-                if row['normalized_event'] == current_norm_event and row['camera'] == current_camera:
-                    end_time = row['timestamp']
-                    if pd.notna(row['battery']):
-                        batteries.append(row['battery'])
-                else:
-                    # Compress and rename events
-                    event_name = {
-                        'Battery Charging': 'Charging Session',
-                        'System Power On': 'Device Turned On',
-                        'System Power Off': 'Device Turned Off',
-                        'Start Record': 'Recording Started',
-                        'Stop Record': 'Recording Stopped',
-                        'Low Battery': 'Low Battery Alert',
-                        'Battery Empty': 'Battery Depleted',
-                        'Battery Changing Done': 'Charging Completed'
-                    }.get(current_norm_event, current_norm_event)
-                    
-                    if batteries:
-                        min_bat = min(batteries)
-                        max_bat = max(batteries)
-                        battery_range = f"{int(min_bat)}% - {int(max_bat)}%" if min_bat != max_bat else f"{int(min_bat)}%"
-                    else:
-                        battery_range = "N/A"
-                    duration = (end_time - start_time).total_seconds() / 60
-                    compressed_events.append({
-                        'Start Time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
-                        'End Time': end_time.strftime('%Y-%m-%d %H:%M:%S'),
-                        'Camera': current_camera,
-                        'Activity': event_name,
-                        'Battery Level': battery_range,
-                        'Duration (min)': f"{duration:.1f}"
-                    })
-                    current_norm_event = row['normalized_event']
-                    current_camera = row['camera']
-                    start_time = row['timestamp']
-                    batteries = [row['battery']] if pd.notna(row['battery']) else []
-                    end_time = start_time
-            
-            # Last group
-            event_name = {
-                'Battery Charging': 'Charging Session',
-                'System Power On': 'Device Turned On',
-                'System Power Off': 'Device Turned Off',
-                'Start Record': 'Recording Started',
-                'Stop Record': 'Recording Stopped',
-                'Low Battery': 'Low Battery Alert',
-                'Battery Empty': 'Battery Depleted',
-                'Battery Changing Done': 'Charging Completed'
-            }.get(current_norm_event, current_norm_event)
-            if batteries:
-                min_bat = min(batteries)
-                max_bat = max(batteries)
-                battery_range = f"{int(min_bat)}% - {int(max_bat)}%" if min_bat != max_bat else f"{int(min_bat)}%"
+            # Filter for valid data
+            valid_df = filtered_df.dropna(subset=['battery']).copy()
+            if valid_df.empty:
+                st.warning("No battery data in range.")
             else:
-                battery_range = "N/A"
-            duration = (end_time - start_time).total_seconds() / 60
-            compressed_events.append({
-                'Start Time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
-                'End Time': end_time.strftime('%Y-%m-%d %H:%M:%S'),
-                'Camera': current_camera,
-                'Activity': event_name,
-                'Battery Level': battery_range,
-                'Duration (min)': f"{duration:.1f}"
-            })
-        
-        events_df = pd.DataFrame(compressed_events)
-        st.dataframe(events_df, use_container_width=True, hide_index=True)
-        
-        # Alerts & Issues (critical points only)
-        st.subheader("Alerts & Issues")
-        activity_df = filtered_df.copy()
-        activity_df['Status'] = activity_df['normalized_event'].apply(lambda e: '⚠️ Warning' if 'Low Battery' in e or 'Battery Empty' in e else '🔴 Error' if 'Error' in e else None)
-        activity_df = activity_df.dropna(subset=['Status'])  # Only show rows with alerts
-        if not activity_df.empty:
-            activity_df['Activity'] = activity_df['normalized_event'].apply(lambda e: {
-                'Low Battery': 'Low Battery Alert',
-                'Battery Empty': 'Battery Depleted',
-                'Error': 'System Error'
-            }.get(e.split(' - ')[0], e))
-            activity_cols = ['timestamp', 'camera', 'Activity', 'battery', 'Status']
-            activity_display = activity_df[activity_cols].tail(50)  # Last 50 alerts
-            activity_display.columns = ['Time', 'Camera', 'Alert', 'Battery %', 'Status']
-            st.dataframe(activity_display, use_container_width=True, hide_index=True)
+                # Color function
+                def get_color(bat):
+                    if bat <= 20:
+                        return 'darkred'
+                    elif bat <= 60:
+                        return 'orange'
+                    else:
+                        return 'darkgreen'
+                
+                # Battery level line (colored segments)
+                for i in range(1, len(valid_df)):
+                    start_bat = valid_df.iloc[i-1]['battery']
+                    end_bat = valid_df.iloc[i]['battery']
+                    start_time = valid_df.iloc[i-1]['timestamp']
+                    end_time = valid_df.iloc[i]['timestamp']
+                    color = get_color((start_bat + end_bat) / 2)
+                    fig.add_trace(go.Scatter(
+                        x=[start_time, end_time],
+                        y=[start_bat, end_bat],
+                        mode='lines',
+                        line=dict(color=color, width=3),
+                        showlegend=False,
+                        name=f'Battery {color}'
+                    ))
+                
+                # Power On markers
+                power_on = valid_df[valid_df['normalized_event'].str.contains('Power On', na=False)]
+                if not power_on.empty:
+                    colors = [get_color(b) for b in power_on['battery']]
+                    fig.add_trace(go.Scatter(
+                        x=power_on['timestamp'],
+                        y=power_on['battery'],
+                        mode='markers',
+                        marker=dict(color=colors, size=12, symbol='triangle-up', line=dict(width=2, color='black')),
+                        name='Power On',
+                        hovertemplate='<b>Power On</b><br>Time: %{x}<br>Battery: %{y}%<extra></extra>'
+                    ))
+                
+                # Recording horizontal lines
+                recording_starts = valid_df[valid_df['normalized_event'].str.contains('Start Record', na=False)]
+                for start_row in recording_starts.itertuples():
+                    start_time = start_row.timestamp
+                    start_bat = start_row.battery
+                    # Find next Stop Record for same camera
+                    stop_mask = (valid_df['timestamp'] > start_time) & (valid_df['normalized_event'].str.contains('Stop Record', na=False)) & (valid_df['camera'] == start_row.camera)
+                    stop_row = valid_df.loc[stop_mask].iloc[0] if stop_mask.any() else valid_df.iloc[-1]
+                    end_time = stop_row.timestamp
+                    end_bat = stop_row.battery
+                    duration = (end_time - start_time).total_seconds() / 3600  # Hours
+                    fig.add_hline(y=start_bat, x0=start_time, x1=end_time, line=dict(color='blue', width=4, dash='dash'), annotation_text=f'Recording {duration:.1f}h')
+                
+                # Charging segments
+                charging = valid_df[valid_df['normalized_event'].str.contains('Battery Charging', na=False)]
+                for i in range(1, len(charging)):
+                    start_time = charging.iloc[i-1]['timestamp']
+                    end_time = charging.iloc[i]['timestamp']
+                    avg_bat = (charging.iloc[i-1]['battery'] + charging.iloc[i]['battery']) / 2
+                    fig.add_trace(go.Scatter(
+                        x=[start_time, end_time],
+                        y=[charging.iloc[i-1]['battery'], charging.iloc[i]['battery']],
+                        mode='lines',
+                        line=dict(color='purple', width=4, dash='dot'),
+                        showlegend=False,
+                        name='Charging'
+                    ))
+                
+                # Usage (after DC Remove)
+                usage = valid_df[valid_df['normalized_event'].str.contains('DC Remove', na=False)]
+                for usage_row in usage.itertuples():
+                    start_time = usage_row.timestamp
+                    # Next event or end
+                    next_mask = valid_df['timestamp'] > start_time
+                    next_row = valid_df.loc[next_mask].iloc[0] if next_mask.any() else valid_df.iloc[-1]
+                    end_time = next_row.timestamp
+                    fig.add_trace(go.Scatter(
+                        x=[start_time, end_time],
+                        y=[usage_row.battery, next_row.battery],
+                        mode='lines',
+                        line=dict(color='black', width=2),
+                        showlegend=False,
+                        name='Usage'
+                    ))
+                
+                # X-axis: Time if <1 day, Date otherwise
+                range_days = (filtered_df['timestamp'].max() - filtered_df['timestamp'].min()).days
+                if range_days < 1:
+                    fig.update_xaxes(title_text="Time (HH:MM)")
+                else:
+                    fig.update_xaxes(title_text="Date")
+                
+                fig.update_layout(
+                    title='Battery & Events Timeline (No skipped days)',
+                    yaxis_title='Battery Level (%)',
+                    yaxis=dict(range=[0, 100], tickformat='.0f'),
+                    height=500,
+                    font=dict(size=12, family="Arial"),
+                    hovermode='x unified',
+                    plot_bgcolor='white',
+                    legend=dict(orientation="h")
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Export PDF with summary
+                if st.button("📄 Export Full Report as PDF"):
+                    pdf_buffer = BytesIO()
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.set_font("Arial", size=16)
+                    pdf.cell(0, 10, txt="Battery Report", ln=True, align='C')
+                    pdf.set_font("Arial", size=12)
+                    pdf.cell(0, 10, txt=f"Date Range: {start_date} to {end_date}", ln=True)
+                    pdf.cell(0, 10, txt=f"Camera: {', '.join(selected_cameras)}", ln=True)
+                    
+                    # Add graph as PNG
+                    graph_buffer = BytesIO()
+                    fig.write_image(graph_buffer, format='png', engine='kaleido')
+                    graph_buffer.seek(0)
+                    pdf.image(graph_buffer, x=10, y=30, w=190)
+                    
+                    # Add summary text
+                    pdf.ln(200)
+                    pdf.set_font("Arial", size=10)
+                    power_on_df = filtered_df[filtered_df['normalized_event'].str.contains('Power On', na=False)]
+                    recording_start_df = filtered_df[filtered_df['normalized_event'].str.contains('Start Record', na=False)]
+                    charging_df = filtered_df[filtered_df['normalized_event'].str.contains('Battery Charging', na=False)]
+                    low_events = filtered_df[filtered_df['battery'] <= 20]
+                    
+                    summary = f"Battery Usage:\n"
+                    if not power_on_df.empty:
+                        summary += f"- Powered on {len(power_on_df)} times (battery {int(power_on_df['battery'].min())}%-{int(power_on_df['battery'].max())}%).\n"
+                    if not recording_start_df.empty:
+                        summary += f"- Recorded {len(recording_start_df)} sessions (battery {int(recording_start_df['battery'].min())}%-{int(recording_start_df['battery'].max())}%).\n"
+                    if not charging_df.empty:
+                        summary += f"- Charged {len(charging_df)} times (from {int(charging_df['battery'].min())}%).\n"
+                    if not low_events.empty:
+                        summary += f"- Low battery alerts: {len(low_events)} (quick drops may indicate battery health issue).\n"
+                    summary += f"Total events: {len(filtered_df)}."
+                    
+                    pdf.multi_cell(0, 5, txt=summary)
+                    
+                    pdf.output(pdf_buffer)
+                    pdf_buffer.seek(0)
+                    b64 = base64.b64encode(pdf_buffer.read()).decode()
+                    href = f'<a href="data:application/pdf;base64,{b64}" download="full_battery_report.pdf">📥 Download Full Report PDF</a>'
+                    st.markdown(href, unsafe_allow_html=True)
         else:
-            st.success("No alerts or issues detected.")
+            st.warning("No battery data in range.")
+        
+        # Detailed Graph Summary
+        st.subheader("What Happened (Timeline)")
+        if not filtered_df.empty:
+            narrative = []
+            prev_time = None
+            for _, row in filtered_df.iterrows():
+                if pd.notna(row['battery']):
+                    bat_status = "Low" if row['battery'] <= 20 else "Medium" if row['battery'] <= 60 else "Good"
+                    event_desc = {
+                        'System Power On': f"Powered on at {int(row['battery'])}% ({bat_status})",
+                        'Start Record': f"Started recording at {int(row['battery'])}% ({bat_status})",
+                        'Stop Record': f"Stopped recording at {int(row['battery'])}% ({bat_status})",
+                        'Battery Charging': f"Charging at {int(row['battery'])}%",
+                        'DC Remove': f"Disconnected from dock at {int(row['battery'])}%—started usage",
+                        'Low Battery': f"Low battery alert at {int(row['battery'])}%"
+                    }.get(row['normalized_event'], row['normalized_event'])
+                    
+                    if prev_time:
+                        dur_min = (row['timestamp'] - prev_time).total_seconds() / 60
+                        if dur_min > 5:  # Significant gap
+                            narrative.append(f"At {row['timestamp'].strftime('%H:%M:%S')}, {event_desc}. Previous event {dur_min:.1f} min ago.")
+                        else:
+                            narrative.append(f"At {row['timestamp'].strftime('%H:%M:%S')}, {event_desc}.")
+                    else:
+                        narrative.append(f"At {row['timestamp'].strftime('%H:%M:%S')}, {event_desc}.")
+                    
+                    # Check for quick drops
+                    if prev_time and row['battery'] < prev_time['battery'] - 5:
+                        narrative.append(f"Quick battery drop detected—possible health issue.")
+                    
+                    prev_time = row['timestamp']
+            
+            # Recording/Charging durations
+            recording_dur = filtered_df[filtered_df['normalized_event'].str.contains('Stop Record', na=False)]['battery'].count() * 1.0  # Approx hours
+            charging_dur = filtered_df[filtered_df['normalized_event'].str.contains('Battery Changing Done', na=False)]['battery'].count() * 0.5  # Approx hours
+            narrative.append(f"Total recording time: ~{recording_dur:.1f} hours. Charging time: ~{charging_dur:.1f} hours.")
+            
+            st.markdown("\n".join(narrative))
 else:
-    st.info("Upload .txt log files to start tracking your cameras.")
-    # Example
-    example_data = {
-        'Start Time': ['2025-09-03 01:24:56', '2025-09-03 08:12:05'],
-        'End Time': ['2025-09-03 02:15:36', '2025-09-03 08:12:05'],
-        'Camera': ['007120', '007490'],
-        'Activity': ['Charging Session', 'Device Turned Off'],
-        'Battery Level': ['92% - 100%', '100%'],
-        'Duration (min)': ['50.7', '0.0']
-    }
-    st.subheader("Example Key Activities")
-    st.dataframe(pd.DataFrame(example_data))
+    st.info("Upload .txt log files to start.")
