@@ -122,6 +122,10 @@ if len(uploaded_files) > 0:
             event_map = valid_df['normalized_event'].shift().fillna('None') + ' → ' + valid_df['normalized_event']
             duration_map = valid_df['timestamp'].diff().fillna(pd.Timedelta(0)).dt.total_seconds() / 60  # Fixed: Use timestamp diff
             
+            # Add as columns to valid_df to avoid unhashable Series error
+            valid_df['event_map'] = event_map
+            valid_df['duration_map'] = duration_map
+            
             fig.add_trace(go.Scatter(
                 x=valid_df['timestamp'],
                 y=valid_df['battery'],
@@ -136,7 +140,7 @@ if len(uploaded_files) > 0:
                 'Event: %{customdata[1]}<br>' +
                 'Pre-Event: %{customdata[2]}<br>' +
                 'Duration: %{customdata[3]:.1f} min<extra></extra>',
-                customdata=valid_df[['camera', 'normalized_event', event_map, duration_map]].values
+                customdata=valid_df[['camera', 'normalized_event', 'event_map', 'duration_map']].values
             ))
             
             fig.update_layout(
