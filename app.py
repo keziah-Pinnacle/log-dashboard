@@ -85,49 +85,60 @@ if len(uploaded_files) > 0:
         if filtered_df['battery'].notna().any():
             fig = go.Figure()
             
-            # Add background color zones
+            # Add background color zones (vertical fill)
             fig.add_trace(go.Scatter(
                 x=[filtered_df['timestamp'].min(), filtered_df['timestamp'].max()],
                 y=[0, 20],
                 fill='tozeroy',
-                fillcolor='rgba(255, 0, 0, 0.2)',  # Red zone (0-20%)
-                line=dict(color='rgba(255, 0, 0, 0)'),
+                fillcolor='rgba(139, 0, 0, 0.4)',  # Dark red (0-20%)
+                line=dict(color='rgba(139, 0, 0, 0)'),
                 name='Critical (0-20%)',
                 showlegend=True
             ))
             fig.add_trace(go.Scatter(
                 x=[filtered_df['timestamp'].min(), filtered_df['timestamp'].max()],
-                y=[20, 65],
+                y=[20, 60],
                 fill='tozeroy',
-                fillcolor='rgba(255, 165, 0, 0.2)',  # Amber zone (20-65%)
+                fillcolor='rgba(255, 165, 0, 0.4)',  # Orange (20-60%)
                 line=dict(color='rgba(255, 165, 0, 0)'),
-                name='Caution (20-65%)',
+                name='Caution (20-60%)',
                 showlegend=True
             ))
             fig.add_trace(go.Scatter(
                 x=[filtered_df['timestamp'].min(), filtered_df['timestamp'].max()],
-                y=[65, 100],
+                y=[60, 100],
                 fill='tozeroy',
-                fillcolor='rgba(0, 255, 0, 0.2)',  # Green zone (>65%)
-                line=dict(color='rgba(0, 255, 0, 0)'),
-                name='Good (>65%)',
+                fillcolor='rgba(0, 100, 0, 0.4)',  # Dark green (60-100%)
+                line=dict(color='rgba(0, 100, 0, 0)'),
+                name='Good (60-100%)',
                 showlegend=True
             ))
             
             # Battery line with markers
             valid_df = filtered_df.dropna(subset=['battery'])
+            # Map events for hover
+            event_map = valid_df['normalized_event'].shift().fillna('') + ' → ' + valid_df['normalized_event']
+            duration_map = valid_df.groupby('timestamp').ngroup().diff().fillna(0) * (1/60)  # Approx duration in minutes
+            
             fig.add_trace(go.Scatter(
                 x=valid_df['timestamp'],
                 y=valid_df['battery'],
                 mode='lines+markers',
-                line=dict(color='black', width=2),  # Bold black line to highlight levels
+                line=dict(color='black', width=2),
                 marker=dict(size=8, line=dict(width=1, color='darkgray')),
                 name='Battery %',
-                hovertemplate='<b>%{x}</b><br>Battery: %{y}%<br>Camera: ' + valid_df['camera'] + '<extra></extra>'
+                hovertemplate=
+                '<b>%{x}</b><br>' +
+                'Battery: %{y}%<br>' +
+                'Camera: %{customdata[0]}<br>' +
+                'Event: %{customdata[1]}<br>' +
+                'Pre-Event: %{customdata[2]}<br>' +
+                'Duration: %{customdata[3]:.1f} min<extra></extra>',
+                customdata=valid_df[['camera', 'normalized_event', event_map, duration_map]].values
             ))
             
             fig.update_layout(
-                title='Battery Levels (Red: 0-20%, Amber: 20-65%, Green: >65%)',
+                title='Battery Levels (Dark Red: 0-20%, Orange: 20-60%, Dark Green: 60-100%)',
                 xaxis_title='Date',
                 yaxis_title='Battery Level (%)',
                 yaxis=dict(range=[0, 100], tickformat='.0f'),
@@ -140,7 +151,27 @@ if len(uploaded_files) > 0:
         else:
             st.warning("No battery data for selected cameras.")
         
-        # Main Events (summarized key events with non-tech names)
+        # Graph Summary for non-tech users
+        st.subheader("Battery Usage Summary")
+        if filtered_df['battery'].notna().any():
+            power_on_df = filtered_df[filtered_df['normalized_event'].str.contains('Power On', na=False)]
+            recording_start_df = filtered_df[filtered_df['normalized_event'].str.contains('Start Record', na=False)]
+            charging_df = filtered_df[filtered_df['normalized_event'].str.contains('Battery Charging', na=False)]
+            
+            summary_text = "Here's what happened with the battery:\n\n"
+            if not power_on_df.empty:
+                summary_text += f"- Device turned on {len(power_on_df)} times, starting with battery levels from {int(power_on_df['battery'].min())}% to {int(power_on_df['battery'].max())}%.\n"
+            if not recording_start_df.empty:
+                summary_text += f"- Recording started {len(recording_start_df)} times, with battery between {int(recording_start_df['battery'].min())}% and {int(recording_start_df['battery'].max())}%.\n"
+            if not charging_df.empty:
+                summary_text += f"- Charging happened {len(charging_df)} times, boosting battery when it was as low as {int(charging_df['battery'].min())}%.\n"
+            total_usage = len(filtered_df) - len(filtered_df[filtered_df['battery'].isna()])
+            summary_text += f"- Total battery checks: {total_usage}. The battery {'stayed healthy' if filtered_df['battery'].min() > 20 else 'had low points'}."
+            st.markdown(summary_text)
+        else:
+            st.warning("No battery data to summarize.")
+        
+        # Key Activities (summarized key events with non-tech names)
         st.subheader("Key Activities")
         compressed_events = []
         if not filtered_df.empty:
@@ -220,7 +251,7 @@ if len(uploaded_files) > 0:
         events_df = pd.DataFrame(compressed_events)
         st.dataframe(events_df, use_container_width=True, hide_index=True)
         
-        # Recent Activities (alerts and critical points only)
+        # Alerts & Issues (critical points only)
         st.subheader("Alerts & Issues")
         activity_df = filtered_df.copy()
         activity_df['Status'] = activity_df['normalized_event'].apply(lambda e: '⚠️ Warning' if 'Low Battery' in e or 'Battery Empty' in e else '🔴 Error' if 'Error' in e else None)
@@ -237,45 +268,6 @@ if len(uploaded_files) > 0:
             st.dataframe(activity_display, use_container_width=True, hide_index=True)
         else:
             st.success("No alerts or issues detected.")
-        
-        # Overall Summary
-        st.subheader("Quick Overview")
-        if not filtered_df.empty:
-            date_range = f"{filtered_df['timestamp'].min().strftime('%Y-%m-%d')} to {filtered_df['timestamp'].max().strftime('%Y-%m-%d')}"
-            total_events = len(filtered_df)
-            unique_events = filtered_df['normalized_event'].nunique()
-            min_battery = filtered_df['battery'].min()
-            max_battery = filtered_df['battery'].max()
-            avg_battery = filtered_df['battery'].mean()
-            
-            power_ons = len(filtered_df[filtered_df['normalized_event'].str.contains('Power On', na=False)])
-            power_offs = len(filtered_df[filtered_df['normalized_event'].str.contains('Power Off', na=False)])
-            charging_sessions = len(filtered_df[filtered_df['normalized_event'].str.contains('Battery Charging', na=False)])
-            low_battery_count = len(filtered_df[filtered_df['battery'] <= 20])
-            
-            summary = f"""
-            **Time Frame:** {date_range}
-            
-            **At a Glance:**
-            - Total log entries: {total_events}
-            - Different events: {unique_events}
-            - Battery range: {min_battery:.0f}% to {max_battery:.0f}% (average: {avg_battery:.0f}%)
-            
-            **Key Moments:**
-            - Device Turned On: {power_ons} times
-            - Device Turned Off: {power_offs} times
-            - Charging sessions: {charging_sessions}
-            - Low battery alerts (≤20%): {low_battery_count}
-            
-            **What Happened:**
-            The device was active during this time, turning on and off as needed.
-            Battery {'dropped low' if min_battery <= 20 else 'stayed mostly stable'}.
-            Charging happened {'a few times' if charging_sessions > 1 else 'once'}, keeping it full.
-            No major problems unless alerts show up below.
-            """
-            st.markdown(summary)
-        else:
-            st.warning("No data for selected cameras.")
 else:
     st.info("Upload .txt log files to start tracking your cameras.")
     # Example
