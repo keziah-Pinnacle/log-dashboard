@@ -88,11 +88,21 @@ if len(uploaded_files) > 0:
         if filtered_df['battery'].notna().any():
             fig = go.Figure()
             
-            # Filter for valid data and interpolate for smoothness (no skips)
+            # Filter for valid data and handle duplicates for smoothing
             valid_df = filtered_df.dropna(subset=['battery']).copy()
             if not valid_df.empty:
-                # Interpolate missing timestamps for smooth lines
-                valid_df = valid_df.set_index('timestamp').resample('1T').interpolate(method='linear').reset_index()  # 1-min intervals
+                # Aggregate duplicates: average battery, concatenate events
+                valid_df = valid_df.groupby('timestamp').agg({
+                    'battery': 'mean',
+                    'normalized_event': lambda x: '; '.join(x),
+                    'camera': 'first'
+                }).reset_index()
+                
+                # Interpolate only large gaps (>5 min) for smoothness without overdoing
+                valid_df['timestamp'] = pd.to_datetime(valid_df['timestamp'])
+                valid_df = valid_df.sort_values('timestamp')
+                valid_df = valid_df.set_index('timestamp')
+                valid_df = valid_df.resample('5T').interpolate(method='linear').reset_index()  # 5-min intervals for gaps
                 
                 # Color function
                 def get_color(bat):
