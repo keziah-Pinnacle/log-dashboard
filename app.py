@@ -98,11 +98,11 @@ if len(uploaded_files) > 0:
                     'camera': 'first'
                 }).reset_index()
                 
-                # Interpolate gaps >5 min
+                # Interpolate gaps >5 min (10-min for speed)
                 valid_df['timestamp'] = pd.to_datetime(valid_df['timestamp'])
                 valid_df = valid_df.sort_values('timestamp')
                 valid_df = valid_df.set_index('timestamp')
-                valid_df = valid_df.resample('5T').interpolate(method='linear').reset_index()
+                valid_df = valid_df.resample('10T').interpolate(method='linear').reset_index()
                 
                 # Color function
                 def get_color(bat):
@@ -113,12 +113,13 @@ if len(uploaded_files) > 0:
                     else:
                         return 'darkgreen'
                 
-                # Battery level line (smooth, single line)
+                # Battery level line (single smooth line)
                 fig.add_trace(go.Scatter(
                     x=valid_df['timestamp'],
                     y=valid_df['battery'],
-                    mode='lines',
+                    mode='lines+markers',
                     line=dict(color='gray', width=2),
+                    marker=dict(size=4, color='gray'),
                     name='Battery Level',
                     hovertemplate='<b>Battery</b><br>Time: %{x}<br>Level: %{y}%<extra></extra>'
                 ))
@@ -149,14 +150,13 @@ if len(uploaded_files) > 0:
                         hovertemplate='<b>Power Off</b><br>Time: %{x}<br>Battery: %{y}%<extra></extra>'
                     ))
                 
-                # Charging (single trace, grouped)
+                # Charging (single trace, grouped, light black dotted)
                 charging_starts = filtered_df[filtered_df['normalized_event'].str.contains('Battery Charging', na=False) & ~filtered_df['normalized_event'].str.contains('Done', na=False)].dropna(subset=['battery'])
                 if not charging_starts.empty:
-                    # Group consecutive charging
                     charging_groups = []
                     current_group = []
                     for _, row in charging_starts.iterrows():
-                        if not current_group or (row['timestamp'] - current_group[-1]['timestamp']).total_seconds() < 300:  # 5 min
+                        if not current_group or (row['timestamp'] - current_group[-1]['timestamp']).total_seconds() < 300:
                             current_group.append(row)
                         else:
                             charging_groups.append(current_group)
@@ -176,26 +176,25 @@ if len(uploaded_files) > 0:
                             x=[start_time, end_time],
                             y=[start_bat, end_bat],
                             mode='lines',
-                            line=dict(color='purple', width=2, dash='dot'),
+                            line=dict(color='black', width=1, dash='dot'),
                             showlegend=True,
                             name='Charging'
                         ))
-                        fig.add_annotation(x=mid_time, y=(start_bat + end_bat)/2, text=f"Charge {int(start_bat)}% to {int(end_bat)}% in {dur_min:.1f}min (+{charge_gained}%)", 
-                                           showarrow=False, font=dict(size=9), bgcolor='white', bordercolor='purple')
+                        fig.add_annotation(x=mid_time, y=(start_bat + end_bat)/2, text=f"Charge {int(start_bat)}% to {int(end_bat)}% in {dur_min:.1f}min", 
+                                           showarrow=False, font=dict(size=8), bgcolor='white', bordercolor='black')
                 
-                # Recording (single trace per session, grouped)
+                # Recording (single trace per session)
                 recording_starts = filtered_df[filtered_df['normalized_event'].str.contains('Start Record', na=False)].dropna(subset=['battery'])
                 for start_row in recording_starts.itertuples():
                     start_time = start_row.timestamp
                     start_bat = start_row.battery
-                    # Find next Stop Record
                     stop_mask = (filtered_df['timestamp'] > start_time) & (filtered_df['normalized_event'].str.contains('Stop Record', na=False)) & (filtered_df['camera'] == start_row.camera)
                     stop_row = filtered_df.loc[stop_mask].iloc[0] if stop_mask.any() else filtered_df.iloc[-1]
                     end_time = stop_row.timestamp
                     end_bat = stop_row.battery
                     dur_h = (end_time - start_time).total_seconds() / 3600
                     drop = start_bat - end_bat
-                    condition = "Healthy (low drain)" if drop < 5 * dur_h else "Concern (high drain)"
+                    condition = "Healthy" if drop < 5 * dur_h else "Concern"
                     mid_time = start_time + pd.Timedelta(hours=dur_h/2)
                     rec_color = get_color(start_bat)
                     fig.add_hline(y=start_bat, x0=start_time, x1=end_time, line=dict(color=rec_color, width=2, dash='dot'), 
@@ -223,10 +222,10 @@ if len(uploaded_files) > 0:
                             name='Usage'
                         ))
                         fig.add_annotation(x=mid_time, y=(start_bat + end_bat)/2, text=f"Usage {int(start_bat)}% to {int(end_bat)}% over {dur_h:.1f}h (-{drop}%)", 
-                                           showarrow=False, font=dict(size=9), bgcolor='white', bordercolor='black')
+                                           showarrow=False, font=dict(size=8), bgcolor='white', bordercolor='black')
                 
-                # X-axis: Hours (0 to total, 1-hour ticks)
-                fig.update_xaxes(title_text="Hours from Start", tickmode='linear', tick0=0, dtick=1, tickangle=45)
+                # X-axis: Real time (HH:MM, 1-hour ticks)
+                fig.update_xaxes(title_text="Time (HH:MM)", tickformat="%H:%M", tick0=filtered_df['timestamp'].min(), dtick="1 hour", tickangle=45)
                 
                 fig.update_layout(
                     template='plotly_white',
