@@ -88,11 +88,6 @@ if len(uploaded_files) > 0:
         if filtered_df['battery'].notna().any():
             fig = go.Figure()
             
-            # Calculate total hours for X-axis
-            total_hours = (filtered_df['timestamp'].max() - filtered_df['timestamp'].min()).total_seconds() / 3600
-            hours = pd.date_range(start=filtered_df['timestamp'].min(), end=filtered_df['timestamp'].max(), freq='H')
-            hour_labels = [h.strftime('%H:00') for h in hours]
-            
             # Filter for valid data
             valid_df = filtered_df.dropna(subset=['battery']).copy()
             if not valid_df.empty:
@@ -189,10 +184,11 @@ if len(uploaded_files) > 0:
                                            showarrow=False, font=dict(size=9), bgcolor='white', bordercolor='purple')
                 
                 # Recording (single trace per session, grouped)
-                recording_sessions = []
+                recording_starts = filtered_df[filtered_df['normalized_event'].str.contains('Start Record', na=False)].dropna(subset=['battery'])
                 for start_row in recording_starts.itertuples():
                     start_time = start_row.timestamp
                     start_bat = start_row.battery
+                    # Find next Stop Record
                     stop_mask = (filtered_df['timestamp'] > start_time) & (filtered_df['normalized_event'].str.contains('Stop Record', na=False)) & (filtered_df['camera'] == start_row.camera)
                     stop_row = filtered_df.loc[stop_mask].iloc[0] if stop_mask.any() else filtered_df.iloc[-1]
                     end_time = stop_row.timestamp
