@@ -129,7 +129,7 @@ if len(uploaded_files) > 0:
             
             # Filter for valid data
             valid_df = filtered_df.dropna(subset=['battery']).copy()
-            if not valid_df.empty or len(filtered_df) > 0:  # Handle no battery but other data
+            if not valid_df.empty:
                 # Aggregate duplicates
                 valid_df = valid_df.groupby('timestamp').agg({
                     'battery': 'mean',
@@ -137,24 +137,28 @@ if len(uploaded_files) > 0:
                     'camera': 'first'
                 }).reset_index()
                 
-                # Interpolate gaps >5 min (60-min for speed)
+                # Dynamic resample based on range
                 valid_df['timestamp'] = pd.to_datetime(valid_df['timestamp'])
                 valid_df = valid_df.sort_values('timestamp')
                 valid_df = valid_df.set_index('timestamp')
-                valid_df = valid_df.resample('60min').interpolate(method='linear').reset_index()
+                time_range = (valid_df.index.max() - valid_df.index.min()).total_seconds() / 3600
+                resample_freq = '1min' if time_range < 24 else '1h'
+                valid_df = valid_df.resample(resample_freq, origin='start').mean().interpolate(method='linear').reset_index()
+                valid_df = valid_df.infer_objects()
                 
                 # Add bars for events
-                event_types = ['Charging', 'Recording', 'Usage']
+                event_types = ['Battery Charging', 'Start Record', 'DC Remove']  # Adjusted for exact event names
+                colors = {'Battery Charging': 'green', 'Start Record': 'orange', 'DC Remove': 'black'}
                 for event in event_types:
                     event_df = valid_df[valid_df['normalized_event'].str.contains(event, na=False)]
                     if not event_df.empty:
                         fig.add_trace(go.Bar(
                             x=event_df['timestamp'],
                             y=event_df['battery'],
-                            name=event,
-                            marker_color=get_color(event_df['battery'].mean()),
-                            hovertemplate='<b>{event}</b><br>Time: %{x}<br>Battery: %{y}%<extra></extra>',
-                            width=(event_df['timestamp'].diff().fillna(timedelta(hours=1)).dt.total_seconds() / 3600) * 3600000  # Width in ms for duration
+                            name=event.replace('Battery ', '').replace('Start ', ''),
+                            marker_color=colors[event],
+                            hovertemplate='<b>%{data.name}</b><br>Time: %{x}<br>Battery: %{y}%<extra></extra>',
+                            width=(event_df['timestamp'].diff().fillna(pd.Timedelta(minutes=1)).dt.total_seconds() / 3600) * 3600000  # Width in ms
                         ))
                 
                 # X-axis: Real time (HH:MM, 1-hour ticks)
@@ -175,7 +179,7 @@ if len(uploaded_files) > 0:
                     barmode='stack'  # Stack bars for overlaps
                 )
                 
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
                 
                 # Graph Summary
                 st.subheader("Graph Summary")
@@ -229,11 +233,14 @@ if len(uploaded_files) > 0:
                     pdf.cell(0, 10, text=f"Date Range: {start_date} to {end_date}", new_x="LMARGIN", new_y="NEXT")
                     pdf.cell(0, 10, text=f"Camera: {', '.join(selected_cameras)}", new_x="LMARGIN", new_y="NEXT")
                     
-                    # Add graph as PNG
+                    # Add graph as PNG with error handling
                     graph_buffer = BytesIO()
-                    fig.write_image(graph_buffer, format='png', engine='kaleido')
-                    graph_buffer.seek(0)
-                    pdf.image(graph_buffer, x=10, y=30, w=190)
+                    try:
+                        fig.write_image(graph_buffer, format='png', engine='kaleido', width=600, height=400)
+                        graph_buffer.seek(0)
+                        pdf.image(graph_buffer, x=10, y=30, w=190)
+                    except Exception as e:
+                        st.warning(f"Graph export failed: {e}. Graph not included in PDF.")
                     
                     pdf.ln(200)
                     pdf.set_font("Arial", size=10)
@@ -270,7 +277,7 @@ if len(uploaded_files) > 0:
             alerts_table['End Time'] = alerts_table['end_time'].dt.strftime('%H:%M:%S')
             alerts_table['Duration (min)'] = ((alerts_table['end_time'] - alerts_table['start_time']).dt.total_seconds() / 60).round(1)
             alerts_table = alerts_table[['Start Time', 'End Time', 'event', 'battery_range', 'Duration (min)']]
-            st.dataframe(alerts_table, use_container_width=True)
+            st.dataframe(alerts_table, width='stretch')
         else:
             st.success("No alerts detected.")
         
