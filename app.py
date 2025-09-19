@@ -87,7 +87,7 @@ if len(uploaded_files) > 0:
                 battery = None
                 if 'Battery Level -' in full_event:
                     battery_str = full_event.split('Battery Level -')[-1].strip().rstrip('%').strip()
-                    battery = int(battery_str) if battery_str and battery_str.isdigit() else None
+                    battery = int(battery_str) if battery_str.isdigit() else None
                 
                 id_match = re.search(r'#ID:(\d{6})-\d{6}', line)
                 camera = id_match.group(1) if id_match else default_camera
@@ -181,35 +181,17 @@ if len(uploaded_files) > 0:
                         hovertemplate='<b>Power Off</b><br>Time: %{x}<br>Battery: %{y}%<extra></extra>'
                     ))
                 
-                # Charging (light black dotted, single trace with session details)
+                # Charging (light black dotted, single trace)
                 charging = filtered_df[filtered_df['normalized_event'].str.contains('Battery Charging', na=False)].dropna(subset=['battery'])
                 if not charging.empty:
-                    charging_groups = []
-                    current_group = []
-                    for _, row in charging.iterrows():
-                        if not current_group or (row['timestamp'] - current_group[-1]['timestamp']).total_seconds() < 300:
-                            current_group.append(row)
-                        else:
-                            charging_groups.append(current_group)
-                            current_group = [row]
-                    if current_group:
-                        charging_groups.append(current_group)
-                    
-                    for group in charging_groups:
-                        start_time = group[0]['timestamp']
-                        start_bat = group[0]['battery']
-                        end_time = group[-1]['timestamp']
-                        end_bat = group[-1]['battery']
-                        gain = end_bat - start_bat
-                        status = "completed" if end_bat == 100 else "in progress"
-                        fig.add_trace(go.Scatter(
-                            x=[start_time, end_time],
-                            y=[start_bat, end_bat],
-                            mode='lines',
-                            line=dict(color='black', width=1, dash='dot'),
-                            name='Charging' if status == "in progress" else 'Charging Completed',
-                            hovertemplate=f'<b>Charging {status}</b><br>From: {start_time.strftime("%H:%M")} to {end_time.strftime("%H:%M")}<br>Gained: {gain}% ({start_bat}% to {end_bat}%)<extra></extra>'
-                        ))
+                    fig.add_trace(go.Scatter(
+                        x=charging['timestamp'],
+                        y=charging['battery'],
+                        mode='lines',
+                        line=dict(color='black', width=1, dash='dot'),
+                        name='Charging',
+                        hovertemplate='<b>Charging</b><br>Time: %{x}<br>Battery: %{y}%<extra></extra>'
+                    ))
                 
                 # Recording (colored horizontal, single per session)
                 recording_starts = filtered_df[filtered_df['normalized_event'].str.contains('Start Record', na=False)].dropna(subset=['battery'])
@@ -241,13 +223,13 @@ if len(uploaded_files) > 0:
                     ))
                 
                 # X-axis: Real time (HH:MM, 1-hour ticks), scrollable
-                fig.update_xaxes(title_text="Time (HH:MM)", tickformat="%H:%M", dtick="3600000", tickangle=45, rangeslider_visible=True)
+                fig.update_xaxes(title_text="Time (HH:MM)", tickformat="%H:%M", dtick="3600000", tickangle=45, rangeslider_visible=True, autorange="reversed")
                 
                 fig.update_layout(
                     template='plotly_white',
                     title='Battery Monitoring Timeline',
                     yaxis_title='Battery Level (%)',
-                    yaxis=dict(range=[0, 100], tickvals=[0,10,20,30,40,50,60,70,80,90,100], tickformat='.0f', gridcolor='lightgray', fixedrange=False),
+                    yaxis=dict(range=[0, 100], tickvals=[0,10,20,30,40,50,60,70,80,90,100], tickformat='.0f', gridcolor='lightgray', autorange="reversed"),
                     height=700,
                     font=dict(size=11, family="Arial"),
                     hovermode='x unified',
@@ -336,15 +318,16 @@ if len(uploaded_files) > 0:
         if not alert_df.empty:
             # Group duplicates
             alert_groups = []
-            current_group = {'event': alert_df.iloc[0]['normalized_event'], 'start_time': alert_df.iloc[0]['timestamp'], 'end_time': alert_df.iloc[0]['timestamp'], 'battery_range': f"{int(alert_df.iloc[0]['battery'])}%" if alert_df.iloc[0]['battery'] else "N/A"}
+            current_group = {'event': alert_df.iloc[0]['normalized_event'], 'start_time': alert_df.iloc[0]['timestamp'], 'end_time': alert_df.iloc[0]['timestamp'], 'battery_range': f"{int(alert_df.iloc[0]['battery'])}%" if alert_df.iloc[0]['battery'] is not None else "N/A"}
             for i in range(1, len(alert_df)):
                 row = alert_df.iloc[i]
                 if row['normalized_event'] == current_group['event'] and (row['timestamp'] - current_group['end_time']).total_seconds() < 300:
                     current_group['end_time'] = row['timestamp']
-                    current_group['battery_range'] = f"{int(min(float(current_group['battery_range'].split('%')[0]) if current_group['battery_range'] != 'N/A' else float('inf'), row['battery'] if row['battery'] else float('inf')))}% - {int(max(float(current_group['battery_range'].split('%')[1].split('-')[0] if '-' in current_group['battery_range'] else current_group['battery_range'].split('%')[0]), row['battery'] if row['battery'] else 0))}%"
+                    if row['battery'] is not None:
+                        current_group['battery_range'] = f"{int(min(float(current_group['battery_range'].split('%')[0]) if current_group['battery_range'] != 'N/A' else float('inf'), row['battery']))}% - {int(max(float(current_group['battery_range'].split('%')[1].split('-')[0] if '-' in current_group['battery_range'] else current_group['battery_range'].split('%')[0]), row['battery']))}%"
                 else:
                     alert_groups.append(current_group)
-                    current_group = {'event': row['normalized_event'], 'start_time': row['timestamp'], 'end_time': row['timestamp'], 'battery_range': f"{int(row['battery'])}%" if row['battery'] else "N/A"}
+                    current_group = {'event': row['normalized_event'], 'start_time': row['timestamp'], 'end_time': row['timestamp'], 'battery_range': f"{int(row['battery'])}%" if row['battery'] is not None else "N/A"}
             alert_groups.append(current_group)
             
             alerts_table = pd.DataFrame(alert_groups)
