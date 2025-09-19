@@ -222,29 +222,24 @@ if len(uploaded_files) > 0:
                         hovertemplate='<b>Usage</b><br>Time: %{x}<br>Battery: %{y}%<extra></extra>'
                     ))
                 
-                # X-axis: Real time (HH:MM, 1-hour ticks), scrollable
-                fig.update_xaxes(title_text="Time (HH:MM)", tickformat="%H:%M", dtick="3600000", tickangle=45, rangeslider_visible=True, autorange="reversed")
+                # X-axis: Real time (HH:MM, 1-hour ticks)
+                fig.update_xaxes(title_text="Time (HH:MM)", tickformat="%H:%M", dtick="3600000", tickangle=45)
                 
                 fig.update_layout(
                     template='plotly_white',
                     title='Battery Monitoring Timeline',
                     yaxis_title='Battery Level (%)',
-                    yaxis=dict(range=[0, 100], tickvals=[0,10,20,30,40,50,60,70,80,90,100], tickformat='.0f', gridcolor='lightgray', autorange="reversed"),
-                    height=700,
+                    yaxis=dict(range=[0, 100], tickvals=[0,10,20,30,40,50,60,70,80,90,100], tickformat='.0f', gridcolor='lightgray'),
+                    height=500,
                     font=dict(size=11, family="Arial"),
                     hovermode='x unified',
                     plot_bgcolor='white',
                     paper_bgcolor='white',
                     legend=dict(orientation="h", bgcolor="white", bordercolor="gray"),
-                    xaxis=dict(showgrid=True, gridcolor='lightgray', linecolor='gray', fixedrange=False),
-                    scrollZoom=True
+                    xaxis=dict(showgrid=True, gridcolor='lightgray', linecolor='gray')
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # Graph Summary
-                st.subheader("Graph Summary")
-                st.text("This graph shows:\n- Gray line: Battery level over time\n- Power On: Green/Red triangles (condition: Green >60%, Orange 20-60%, Red <20%)\n- Power Off: Blue triangles\n- Charging: Light black dotted line (hover for start/end times and % gained)\n- Recording: Colored horizontal lines (hover for duration and condition)\n- Usage: Black solid line")
                 
                 # Battery Usage (under graph)
                 st.subheader("Battery Usage")
@@ -289,10 +284,10 @@ if len(uploaded_files) > 0:
                     pdf = FPDF()
                     pdf.add_page()
                     pdf.set_font("Arial", size=16)
-                    pdf.cell(0, 10, txt="Battery Report", ln=True, align='C')
+                    pdf.cell(0, 10, text="Battery Report", new_x="LMARGIN", new_y="NEXT", align='C')
                     pdf.set_font("Arial", size=12)
-                    pdf.cell(0, 10, txt=f"Date Range: {start_date} to {end_date}", ln=True)
-                    pdf.cell(0, 10, txt=f"Camera: {', '.join(selected_cameras)}", ln=True)
+                    pdf.cell(0, 10, text=f"Date Range: {start_date} to {end_date}", new_x="LMARGIN", new_y="NEXT")
+                    pdf.cell(0, 10, text=f"Camera: {', '.join(selected_cameras)}", new_x="LMARGIN", new_y="NEXT")
                     
                     # Add graph as PNG
                     graph_buffer = BytesIO()
@@ -302,7 +297,7 @@ if len(uploaded_files) > 0:
                     
                     pdf.ln(200)
                     pdf.set_font("Arial", size=10)
-                    pdf.multi_cell(0, 5, txt=summary)
+                    pdf.multi_cell(0, 5, text=summary)
                     
                     pdf.output(pdf_buffer)
                     pdf_buffer.seek(0)
