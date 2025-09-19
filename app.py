@@ -224,10 +224,10 @@ if len(uploaded_files) > 0:
                     pdf = FPDF()
                     pdf.add_page()
                     pdf.set_font("Arial", size=16)
-                    pdf.cell(0, 10, txt="Battery Report", ln=True, align='C')
+                    pdf.cell(0, 10, text="Battery Report", new_x="LMARGIN", new_y="NEXT", align='C')
                     pdf.set_font("Arial", size=12)
-                    pdf.cell(0, 10, txt=f"Date Range: {start_date} to {end_date}", ln=True)
-                    pdf.cell(0, 10, txt=f"Camera: {', '.join(selected_cameras)}", ln=True)
+                    pdf.cell(0, 10, text=f"Date Range: {start_date} to {end_date}", new_x="LMARGIN", new_y="NEXT")
+                    pdf.cell(0, 10, text=f"Camera: {', '.join(selected_cameras)}", new_x="LMARGIN", new_y="NEXT")
                     
                     # Add graph as PNG
                     graph_buffer = BytesIO()
@@ -237,7 +237,7 @@ if len(uploaded_files) > 0:
                     
                     pdf.ln(200)
                     pdf.set_font("Arial", size=10)
-                    pdf.multi_cell(0, 5, txt=summary)
+                    pdf.multi_cell(0, 5, text=summary)
                     
                     pdf.output(pdf_buffer)
                     pdf_buffer.seek(0)
