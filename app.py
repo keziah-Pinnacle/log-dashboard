@@ -129,7 +129,7 @@ if len(uploaded_files) > 0:
             
             # Filter for valid data
             valid_df = filtered_df.dropna(subset=['battery']).copy()
-            if not valid_df.empty:
+            if not valid_df.empty or len(filtered_df) > 0:  # Handle no battery but other data
                 # Aggregate duplicates
                 valid_df = valid_df.groupby('timestamp').agg({
                     'battery': 'mean',
@@ -141,7 +141,7 @@ if len(uploaded_files) > 0:
                 valid_df['timestamp'] = pd.to_datetime(valid_df['timestamp'])
                 valid_df = valid_df.sort_values('timestamp')
                 valid_df = valid_df.set_index('timestamp')
-                valid_df = valid_df.resample('60T').interpolate(method='linear').reset_index()
+                valid_df = valid_df.resample('60min').interpolate(method='linear').reset_index()
                 
                 # Add bars for events
                 event_types = ['Charging', 'Recording', 'Usage']
